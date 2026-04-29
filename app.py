@@ -7,6 +7,7 @@ from sklearn.cluster import AgglomerativeClustering
 import re
 import io
 import json
+from urllib.parse import urlparse
 
 # ========================================================
 # 1. UI CONFIGURATIE (Deep Black / Cyber Blue)
@@ -43,7 +44,6 @@ with st.sidebar:
     api_key = st.text_input("OpenAI API Key", type="password", key="api_key_val")
     st.divider()
     
-    # NIEUW: Twee losse sliders voor Clusters en Links
     cluster_threshold = st.slider("Minimale Cluster Match % (Hubs)", 50, 95, 80) / 100
     score_threshold = st.slider("Minimale Link Match % (Links)", 50, 95, 80) / 100
     links_per_page = st.slider("Aantal links per URL", 1, 10, 5)
@@ -55,6 +55,15 @@ def clean_path(url):
     path = url.split('/')[-1] if not url.strip().endswith('/') else url.split('/')[-2]
     return re.sub(r'[-_/]', ' ', path)
 
+def get_folder(url):
+    """Extraheert de hoofdmap uit een URL (bijv. /categorie/ uit domein.nl/categorie/product)"""
+    try:
+        path = urlparse(str(url)).path
+        parts = [p for p in path.split('/') if p]
+        return f"/{parts[0]}/" if parts else "/"
+    except:
+        return "/"
+
 def get_embeddings(texts, key):
     client = OpenAI(api_key=key)
     res = client.embeddings.create(input=texts, model='text-embedding-3-small')
@@ -63,10 +72,9 @@ def get_embeddings(texts, key):
 def get_ai_cluster_names_bulk(clusters_dict, key):
     client = OpenAI(api_key=key)
     
-    # We bouwen één groot tekstblok met een paar voorbeelden uit elk cluster
     payload = ""
     for cid, texts in clusters_dict.items():
-        sample = "\n".join(texts[:10])  # Max 10 URL's per cluster om tokens te besparen
+        sample = "\n".join(texts[:10])
         payload += f"Cluster ID {cid}:\n{sample}\n\n"
         
     prompt = f"""
@@ -82,7 +90,6 @@ def get_ai_cluster_names_bulk(clusters_dict, key):
     {payload}
     """
     
-    # Gebruik response_format JSON zodat we altijd een leesbaar data-object terugkrijgen
     res = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}],
@@ -91,12 +98,10 @@ def get_ai_cluster_names_bulk(clusters_dict, key):
     )
     
     try:
-        # Zet de JSON string van OpenAI om naar een Python dictionary
         result = json.loads(res.choices[0].message.content)
-        # OpenAI geeft keys vaak als string terug ("0"), we zetten dit terug naar integers (0)
         return {int(k): str(v) for k, v in result.items()}
     except Exception as e:
-        return {} # Fallback als er iets fout gaat
+        return {}
 
 def color_score(v):
     if not isinstance(v, (int, float)): return ''
@@ -115,20 +120,15 @@ with tab_inst:
     st.header("Hoe gebruik je deze tool?")
     st.markdown("""
     ### 1. Voorbereiding van het CSV-bestand
-    Lever een CSV-bestand aan (bijv. een export uit Screaming Frog of een eigen lijst) met de volgende structuur:
+    Lever een CSV-bestand aan met de volgende structuur:
     * **Kolom A (eerste kolom):** Moet de volledige URL's bevatten.
-    * **Overige kolommen:** Hier mag content staan zoals de Page Title, H1 of de hoofdtekst. De tool gebruikt deze data om de context te begrijpen.
+    * **Overige kolommen:** Hier mag content staan zoals de Page Title, H1 of de hoofdtekst.
     
     ### 2. OpenAI API Key
-    Voer je eigen OpenAI API Key in de sidebar aan de linkerkant in. De tool maakt gebruik van de `text-embedding-3-small` engine voor razendsnelle en goedkope analyses.
-
+    Voer je eigen OpenAI API Key in de sidebar in.
+    
     ### 3. Focus URL's
-    Plak in het tekstveld de URL's die je wilt analyseren. Dit zijn de pagina's waarvoor je interne linkmogelijkheden wilt vinden. Gebruik één URL per regel.
-
-    ### 4. De Matrix gebruiken
-    * Na de analyse verschijnt een **Cross-Linking Matrix**. 
-    * De matrix is standaard gesorteerd op relevantie (de hubs met de meeste kansen staan bovenaan).
-    * Klik op een **rij** in de matrix om direct alle specifieke link-kansen voor die hub te openen.
+    Plak in het tekstveld de URL's die je wilt analyseren. Gebruik één URL per regel.
     """)
 
 with tab_tool:
@@ -156,44 +156,28 @@ with tab_tool:
                     url_col = raw_df.columns[0]
                     focus_list = [u.strip() for u in urls_txt.split('\n') if u.strip()]
                     
-                    # --- FIX VOOR LEGE CELLEN (NaN) ---
-                    # 1. Verwijder rijen waar de URL compleet leeg is
                     clean_df = raw_df.dropna(subset=[url_col]).copy()
-                    
-                    # 2. Vul alle overige lege cellen met een lege string (voorkomt 'NaN')
                     clean_df = clean_df.fillna("")
-                    
-                    # 3. Filter voor de zekerheid URLs weg die alleen uit spaties bestaan
                     clean_df = clean_df[clean_df[url_col].astype(str).str.strip() != ""]
-                    # ----------------------------------
                     
                     clean_df['text'] = clean_df[url_col].astype(str).apply(clean_path) + " " + clean_df.iloc[:, 1].astype(str)
                     
-                    # 1. Embeddings ophalen voor álle pagina's
                     vecs = get_embeddings(clean_df['text'].tolist(), api_key)
                     
-                    # 2. DYNAMISCHE CLUSTERING (AI groepeert de pagina's zelf op basis van Cosine Similarity)
-                    # We berekenen de distance_threshold (1.0 - gekozen match percentage in sidebar)
                     dist_thresh = 1.0 - cluster_threshold
-                    
                     clustering_model = AgglomerativeClustering(n_clusters=None, distance_threshold=dist_thresh, metric='cosine', linkage='average')
                     clean_df['Cluster_ID'] = clustering_model.fit_predict(vecs)
                     
-                    # 3. CLUSTERS EEN NAAM GEVEN (In Bulk!)
-                    # Verzamel eerst alle teksten per cluster
                     clusters_to_name = {}
                     for cluster_id in clean_df['Cluster_ID'].unique():
                         texts_in_cluster = clean_df[clean_df['Cluster_ID'] == cluster_id]['text'].tolist()
                         clusters_to_name[cluster_id] = texts_in_cluster
                     
-                    # Roep de AI slechts ÉÉN KEER aan voor alle clusters tegelijk
                     cluster_names = get_ai_cluster_names_bulk(clusters_to_name, api_key)
                     
-                    # Koppel de AI-namen aan de DataFrame. Als een naam ontbreekt, gebruik "ALGEMEEN"
                     clean_df['Category'] = clean_df['Cluster_ID'].apply(lambda x: cluster_names.get(x, "ALGEMEEN"))
                     cat_lookup = dict(zip(clean_df[url_col], clean_df['Category']))
 
-                    # 4. INTERNE LINKS BEREKENEN
                     sims = cosine_similarity(vecs)
 
                     found = []
@@ -212,8 +196,10 @@ with tab_tool:
                             if f_url != t_url and s >= score_threshold:
                                 found.append({
                                     'From Hub': src_cat,
+                                    'From Folder': get_folder(f_url),  # NIEUW: Map van vertrek
                                     'Focus URL': f_url,
                                     'To Hub': cat_lookup.get(t_url, "ALGEMEEN"),
+                                    'To Folder': get_folder(t_url),    # NIEUW: Map van bestemming
                                     'Target URL': t_url,
                                     'Score': s * 100
                                 })
@@ -232,52 +218,89 @@ with tab_tool:
     if st.session_state.df_results is not None:
         data = st.session_state.df_results
         
-        # Matrix bouwen
-        matrix = pd.crosstab(data['From Hub'], data['To Hub'])
-        
-        # Sorteren op Totaal (Descending)
-        row_order = matrix.sum(axis=1).sort_values(ascending=False).index
-        col_order = matrix.sum(axis=0).sort_values(ascending=False).index
-        matrix = matrix.reindex(index=row_order, columns=col_order, fill_value=0)
-
         st.divider()
-        st.subheader("📊 Cross-Linking Matrix (Intensity)")
+        st.subheader("📊 Cross-Linking Matrices (Intensity)")
         st.info("💡 Klik op een rij om de details te zien. De matrix is gesorteerd op volume.")
+        
+        # Maak twee tabbladen aan voor de Matrix weergave
+        tab_matrix_hub, tab_matrix_folder = st.tabs(["🗂️ Semantische Hub Matrix", "📁 Technische Folder Matrix"])
 
-        max_val = matrix.values.max() if matrix.values.max() > 0 else 1
-        def style_matrix_cells(val):
+        def style_matrix_cells(val, mx_val):
             if val == 0:
                 return 'background-color: #0a0a0a; color: #222222; text-align: center;'
             else:
-                intensity = 0.2 + 0.8 * (val / max_val)
+                intensity = 0.2 + 0.8 * (val / mx_val)
                 return f'background-color: rgba(0, 162, 255, {intensity}); color: #ffffff; font-weight: bold; text-align: center;'
 
-        styled_matrix = matrix.style.map(style_matrix_cells)
+        # --- TAB 1: HUB MATRIX ---
+        with tab_matrix_hub:
+            matrix_hub = pd.crosstab(data['From Hub'], data['To Hub'])
+            row_order_hub = matrix_hub.sum(axis=1).sort_values(ascending=False).index
+            col_order_hub = matrix_hub.sum(axis=0).sort_values(ascending=False).index
+            matrix_hub = matrix_hub.reindex(index=row_order_hub, columns=col_order_hub, fill_value=0)
 
-        st.dataframe(
-            styled_matrix,
-            use_container_width=True,
-            on_select="rerun",
-            selection_mode="single-row",
-            key="matrix_selector"
-        )
+            max_val_hub = matrix_hub.values.max() if matrix_hub.values.max() > 0 else 1
+            styled_matrix_hub = matrix_hub.style.map(lambda v: style_matrix_cells(v, max_val_hub))
 
-        selection = st.session_state.get("matrix_selector")
-        if selection and selection.get("selection", {}).get("rows"):
-            selected_idx = selection["selection"]["rows"][0]
-            f_cat = matrix.index[selected_idx]
-            
-            st.markdown(f"### 🎯 Uitgaande links vanuit: `{f_cat}`")
-            filtered = data[data['From Hub'] == f_cat]
-            display_filtered = filtered[['Focus URL', 'To Hub', 'Target URL', 'Score']].sort_values(by=['Focus URL', 'Score'], ascending=[True, False]).copy()
-            display_filtered.loc[display_filtered.duplicated('Focus URL'), 'Focus URL'] = ""
-            
             st.dataframe(
-                display_filtered.style.map(color_score, subset=['Score']),
+                styled_matrix_hub,
                 use_container_width=True,
-                hide_index=True,
-                column_config={"Score": st.column_config.NumberColumn(format="%d%%")}
+                on_select="rerun",
+                selection_mode="single-row",
+                key="matrix_selector_hub"
             )
+
+            selection_hub = st.session_state.get("matrix_selector_hub")
+            if selection_hub and selection_hub.get("selection", {}).get("rows"):
+                selected_idx = selection_hub["selection"]["rows"][0]
+                f_cat = matrix_hub.index[selected_idx]
+                
+                st.markdown(f"### 🎯 Uitgaande links vanuit Hub: `{f_cat}`")
+                filtered = data[data['From Hub'] == f_cat]
+                display_filtered = filtered[['Focus URL', 'To Hub', 'Target URL', 'Score']].sort_values(by=['Focus URL', 'Score'], ascending=[True, False]).copy()
+                display_filtered.loc[display_filtered.duplicated('Focus URL'), 'Focus URL'] = ""
+                
+                st.dataframe(
+                    display_filtered.style.map(color_score, subset=['Score']),
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={"Score": st.column_config.NumberColumn(format="%d%%")}
+                )
+
+        # --- TAB 2: FOLDER MATRIX ---
+        with tab_matrix_folder:
+            matrix_folder = pd.crosstab(data['From Folder'], data['To Folder'])
+            row_order_folder = matrix_folder.sum(axis=1).sort_values(ascending=False).index
+            col_order_folder = matrix_folder.sum(axis=0).sort_values(ascending=False).index
+            matrix_folder = matrix_folder.reindex(index=row_order_folder, columns=col_order_folder, fill_value=0)
+
+            max_val_folder = matrix_folder.values.max() if matrix_folder.values.max() > 0 else 1
+            styled_matrix_folder = matrix_folder.style.map(lambda v: style_matrix_cells(v, max_val_folder))
+
+            st.dataframe(
+                styled_matrix_folder,
+                use_container_width=True,
+                on_select="rerun",
+                selection_mode="single-row",
+                key="matrix_selector_folder"
+            )
+
+            selection_folder = st.session_state.get("matrix_selector_folder")
+            if selection_folder and selection_folder.get("selection", {}).get("rows"):
+                selected_idx = selection_folder["selection"]["rows"][0]
+                f_folder = matrix_folder.index[selected_idx]
+                
+                st.markdown(f"### 🎯 Uitgaande links vanuit Folder: `{f_folder}`")
+                filtered_folder = data[data['From Folder'] == f_folder]
+                display_filtered_folder = filtered_folder[['Focus URL', 'To Folder', 'Target URL', 'Score']].sort_values(by=['Focus URL', 'Score'], ascending=[True, False]).copy()
+                display_filtered_folder.loc[display_filtered_folder.duplicated('Focus URL'), 'Focus URL'] = ""
+                
+                st.dataframe(
+                    display_filtered_folder.style.map(color_score, subset=['Score']),
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={"Score": st.column_config.NumberColumn(format="%d%%")}
+                )
 
         # ========================================================
         # 7. TOPIC HUBS OVERZICHT (Indeling op Sterkte)
@@ -285,17 +308,14 @@ with tab_tool:
         st.divider()
         st.subheader("🏗️ Topic Hubs Overzicht")
 
-        # Bereken de gemiddelde scores per hub
         hub_stats = data.groupby('From Hub')['Score'].mean().sort_values(ascending=False)
 
-        # Maak de drie tabbladen aan
         tab_strong, tab_avg, tab_weak = st.tabs([
             "🟢 Sterk (>= 85%)", 
             "🟡 Gemiddeld (70-84%)", 
             "🔴 Zwak (< 70%)"
         ])
 
-        # Hulpfunctie om de hubs binnen een tabblad te tonen
         def render_hub_group(hubs_series):
             if hubs_series.empty:
                 st.info("Geen hubs gevonden voor deze categorie.")
@@ -303,7 +323,6 @@ with tab_tool:
                 for hub, avg_score in hubs_series.items():
                     hub_df = data[data['From Hub'] == hub]
                     with st.expander(f"📁 HUB: {hub} ({round(avg_score)}%)"):
-                        # Sorteer op Focus URL en score, verberg duplicaten
                         display_hub = hub_df[['Focus URL', 'To Hub', 'Target URL', 'Score']].sort_values(by=['Focus URL', 'Score'], ascending=[True, False]).copy()
                         display_hub.loc[display_hub.duplicated('Focus URL'), 'Focus URL'] = ""
                         
@@ -314,7 +333,6 @@ with tab_tool:
                             column_config={"Score": st.column_config.NumberColumn(format="%d%%")}
                         )
 
-        # Deel de hubs in op basis van de kleurenschaal/gemiddelde score
         with tab_strong:
             strong_hubs = hub_stats[hub_stats >= 85]
             render_hub_group(strong_hubs)
@@ -335,9 +353,7 @@ with tab_tool:
         export_df = export_df.sort_values(by=['From Hub', 'Focus URL', 'Score'], ascending=[True, True, False])
         export_df['Score'] = export_df['Score'].apply(lambda x: f"{round(x)}%")
         
-        # Maak Focus URL leeg voor herhalende waarden
         export_df.loc[export_df.duplicated(subset=['From Hub', 'Focus URL']), 'Focus URL'] = ""
-        # Maak From Hub leeg voor herhalende waarden (toont de hub slechts 1x per groep)
         export_df.loc[export_df.duplicated(subset=['From Hub']), 'From Hub'] = ""
         
         csv_buffer = io.StringIO()

@@ -9,6 +9,9 @@ import io
 import json
 from urllib.parse import urlparse
 
+# 🚀 FIX VOOR DE CELL-LIMIET (Zorgt dat grote matrices gestyled kunnen worden)
+pd.set_option("styler.render.max_elements", 1000000)
+
 # ========================================================
 # 1. UI CONFIGURATIE (Deep Black / Cyber Blue)
 # ========================================================
@@ -49,7 +52,7 @@ with st.sidebar:
     links_per_page = st.slider("Aantal links per URL", 1, 10, 5)
 
 # ========================================================
-# 3. HELPERS (Met Caching voor Performance)
+# 3. HELPERS
 # ========================================================
 @st.cache_data(show_spinner=False)
 def clean_path(url):
@@ -58,7 +61,6 @@ def clean_path(url):
 
 @st.cache_data(show_spinner=False)
 def get_folder(url):
-    """Extraheert de eerste hoofdmap (top-level folder) uit een URL"""
     try:
         path = urlparse(str(url)).path
         clean_path = path.strip('/')
@@ -70,7 +72,6 @@ def get_folder(url):
         return "/"
 
 def get_embeddings(texts, key, batch_size=500):
-    """Haalt embeddings op in batches voor snelheid en stabiliteit"""
     client = OpenAI(api_key=key)
     all_embeddings = []
     for i in range(0, len(texts), batch_size):
@@ -90,8 +91,7 @@ def get_ai_cluster_names_bulk(clusters_dict, key):
     Je bent een SEO expert. Hieronder staan verschillende clusters met URL's en titels.
     Bedenk voor ELK cluster één overkoepelende categorie-naam.
     Regels: Max 5 woorden, korte beschrijvende naam, ALTIJD in JSON formaat met Cluster ID als key.
-    Hier is de data:
-    {payload}
+    Hier is de data: {payload}
     """
     res = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -128,45 +128,36 @@ with tab_tool:
     with c2:
         urls_txt = st.text_area("2. Focus URL's (één per regel)", key="urls_input", height=100)
 
-    # ========================================================
-    # 5. DE ANALYSE ENGINE (Snelheids-Geoptimaliseerd)
-    # ========================================================
     if st.button("🚀 GENEREER INTELLIGENCE MATRIX"):
         if not api_key or not file or not urls_txt:
-            st.error("⚠️ Vul alle velden in (API Key, CSV en Focus URL's).")
+            st.error("⚠️ Vul alle velden in.")
         else:
             try:
-                with st.spinner("Bezig met AI-analyse en clustering..."):
+                with st.spinner("Bezig met AI-analyse..."):
                     raw_df = pd.read_csv(file)
                     url_col = raw_df.columns[0]
                     focus_list = [u.strip() for u in urls_txt.split('\n') if u.strip()]
                     
-                    # Opschonen data
                     clean_df = raw_df.dropna(subset=[url_col]).copy()
                     clean_df = clean_df.fillna("")
                     clean_df = clean_df[clean_df[url_col].astype(str).str.strip() != ""]
                     
-                    # Tekst voorbereiden
                     clean_df['text'] = clean_df[url_col].astype(str).apply(clean_path) + " " + clean_df.iloc[:, 1].astype(str)
                     
-                    # 1. Embeddings (Batch verwerking)
                     vecs = get_embeddings(clean_df['text'].tolist(), api_key)
                     
-                    # 2. Clustering
                     dist_thresh = 1.0 - cluster_threshold
                     clustering_model = AgglomerativeClustering(n_clusters=None, distance_threshold=dist_thresh, metric='cosine', linkage='average')
                     clean_df['Cluster_ID'] = clustering_model.fit_predict(vecs)
                     
-                    # 3. AI Cluster Naming (Bulk)
                     clusters_to_name = {cid: clean_df[clean_df['Cluster_ID'] == cid]['text'].tolist() for cid in clean_df['Cluster_ID'].unique()}
                     cluster_names = get_ai_cluster_names_bulk(clusters_to_name, api_key)
                     
                     clean_df['Category'] = clean_df['Cluster_ID'].apply(lambda x: cluster_names.get(x, "ALGEMEEN"))
                     cat_lookup = dict(zip(clean_df[url_col], clean_df['Category']))
 
-                    # 4. Interne Links (Numpy Versnelling)
                     sims = cosine_similarity(vecs)
-                    urls_array = clean_df[url_col].values # Snelheids-upgrade
+                    urls_array = clean_df[url_col].values 
 
                     found = []
                     for f_url in focus_list:
@@ -180,8 +171,7 @@ with tab_tool:
                         added = 0
                         for t_idx in top_idx:
                             s = float(scores[t_idx])
-                            if s < score_threshold: break # Snelheids-upgrade: stop als score te laag wordt
-                                
+                            if s < score_threshold: break
                             t_url = urls_array[t_idx]
                             if f_url != t_url:
                                 found.append({
@@ -202,13 +192,10 @@ with tab_tool:
             except Exception as e:
                 st.error(f"Systeemfout: {e}")
                 
-    # ========================================================
-    # 6. INTERACTIEVE MATRIX & OUTPUT
-    # ========================================================
     if st.session_state.df_results is not None:
         data = st.session_state.df_results
         st.divider()
-        st.subheader("📊 Cross-Linking Matrices (Intensity)")
+        st.subheader("📊 Cross-Linking Matrices")
         
         tab_matrix_hub, tab_matrix_folder = st.tabs(["🗂️ Semantische Hub Matrix", "📁 Technische Folder Matrix"])
 
@@ -217,13 +204,10 @@ with tab_tool:
             intensity = 0.2 + 0.8 * (val / mx_val)
             return f'background-color: rgba(0, 162, 255, {intensity}); color: #ffffff; font-weight: bold; text-align: center;'
 
-        # HUB MATRIX
         with tab_matrix_hub:
             matrix_hub = pd.crosstab(data['From Hub'], data['To Hub'])
-            matrix_hub = matrix_hub.reindex(index=matrix_hub.sum(axis=1).sort_values(ascending=False).index, 
-                                            columns=matrix_hub.sum(axis=0).sort_values(ascending=False).index, fill_value=0)
-            st.dataframe(matrix_hub.style.map(lambda v: style_matrix_cells(v, matrix_hub.values.max() if matrix_hub.values.max()>0 else 1)), 
-                         width='content', on_select="rerun", selection_mode="single-row", key="mx_hub")
+            matrix_hub = matrix_hub.reindex(index=matrix_hub.sum(axis=1).sort_values(ascending=False).index, columns=matrix_hub.sum(axis=0).sort_values(ascending=False).index, fill_value=0)
+            st.dataframe(matrix_hub.style.map(lambda v: style_matrix_cells(v, matrix_hub.values.max() if matrix_hub.values.max()>0 else 1)), width='content', on_select="rerun", selection_mode="single-row", key="mx_hub")
 
             sel_hub = st.session_state.get("mx_hub")
             if sel_hub and sel_hub.get("selection", {}).get("rows"):
@@ -232,13 +216,10 @@ with tab_tool:
                 df_f = data[data['From Hub'] == f_cat][['Focus URL', 'To Hub', 'Target URL', 'Score']].sort_values(by='Score', ascending=False)
                 st.dataframe(df_f.style.map(color_score, subset=['Score']), width='content', hide_index=True)
 
-        # FOLDER MATRIX
         with tab_matrix_folder:
             matrix_folder = pd.crosstab(data['From Folder'], data['To Folder'])
-            matrix_folder = matrix_folder.reindex(index=matrix_folder.sum(axis=1).sort_values(ascending=False).index, 
-                                               columns=matrix_folder.sum(axis=0).sort_values(ascending=False).index, fill_value=0)
-            st.dataframe(matrix_folder.style.map(lambda v: style_matrix_cells(v, matrix_folder.values.max() if matrix_folder.values.max()>0 else 1)), 
-                         width='content', on_select="rerun", selection_mode="single-row", key="mx_folder")
+            matrix_folder = matrix_folder.reindex(index=matrix_folder.sum(axis=1).sort_values(ascending=False).index, columns=matrix_folder.sum(axis=0).sort_values(ascending=False).index, fill_value=0)
+            st.dataframe(matrix_folder.style.map(lambda v: style_matrix_cells(v, matrix_folder.values.max() if matrix_folder.values.max()>0 else 1)), width='content', on_select="rerun", selection_mode="single-row", key="mx_folder")
 
             sel_folder = st.session_state.get("mx_folder")
             if sel_folder and sel_folder.get("selection", {}).get("rows"):
@@ -247,7 +228,6 @@ with tab_tool:
                 df_ff = data[data['From Folder'] == f_folder][['Focus URL', 'To Folder', 'Target URL', 'Score']].sort_values(by='Score', ascending=False)
                 st.dataframe(df_ff.style.map(color_score, subset=['Score']), width='content', hide_index=True)
 
-        # 7. OVERZICHT & EXPORT
         st.divider()
         st.subheader("🏗️ Topic Hubs Overzicht")
         hub_stats = data.groupby('From Hub')['Score'].mean().sort_values(ascending=False)
@@ -262,7 +242,6 @@ with tab_tool:
         with t2: show_hubs(hub_stats[(hub_stats >= 70) & (hub_stats < 85)])
         with t3: show_hubs(hub_stats[hub_stats < 70])
 
-        st.divider()
         csv_buf = io.StringIO()
         data.to_csv(csv_buf, index=False, sep=';')
         st.download_button("📥 Download CSV", csv_buf.getvalue(), "seo_links.csv", "text/csv")

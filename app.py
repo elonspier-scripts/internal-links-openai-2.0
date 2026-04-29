@@ -251,7 +251,7 @@ with tab_tool:
 
             st.dataframe(
                 styled_matrix_hub,
-                use_container_width=True,
+                width='content',
                 on_select="rerun",
                 selection_mode="single-row",
                 key="matrix_selector_hub"
@@ -269,7 +269,7 @@ with tab_tool:
                 
                 st.dataframe(
                     display_filtered.style.map(color_score, subset=['Score']),
-                    use_container_width=True,
+                    width='content',
                     hide_index=True,
                     column_config={"Score": st.column_config.NumberColumn(format="%d%%")}
                 )
@@ -286,7 +286,7 @@ with tab_tool:
 
             st.dataframe(
                 styled_matrix_folder,
-                use_container_width=True,
+                width='content',
                 on_select="rerun",
                 selection_mode="single-row",
                 key="matrix_selector_folder"
@@ -304,7 +304,7 @@ with tab_tool:
                 
                 st.dataframe(
                     display_filtered_folder.style.map(color_score, subset=['Score']),
-                    use_container_width=True,
+                    width='content',
                     hide_index=True,
                     column_config={"Score": st.column_config.NumberColumn(format="%d%%")}
                 )
@@ -335,7 +335,7 @@ with tab_tool:
                         
                         st.dataframe(
                             display_hub.style.map(color_score, subset=['Score']),
-                            use_container_width=True,
+                            width='content',
                             hide_index=True,
                             column_config={"Score": st.column_config.NumberColumn(format="%d%%")}
                         )

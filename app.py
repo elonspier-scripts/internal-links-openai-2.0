@@ -56,11 +56,19 @@ def clean_path(url):
     return re.sub(r'[-_/]', ' ', path)
 
 def get_folder(url):
-    """Extraheert de hoofdmap uit een URL (bijv. /categorie/ uit domein.nl/categorie/product)"""
+    """Extraheert de volledige submap-structuur uit een URL"""
     try:
         path = urlparse(str(url)).path
-        parts = [p for p in path.split('/') if p]
-        return f"/{parts[0]}/" if parts else "/"
+        if not path or path == '/': 
+            return '/'
+        
+        # Als de URL eindigt op een slash, is de URL zelf al een map
+        if path.endswith('/'):
+            return path
+        
+        # Anders knippen we de paginanaam (slug) eraf om de map te vinden
+        parts = path.split('/')
+        return '/'.join(parts[:-1]) + '/'
     except:
         return "/"
 
@@ -196,10 +204,10 @@ with tab_tool:
                             if f_url != t_url and s >= score_threshold:
                                 found.append({
                                     'From Hub': src_cat,
-                                    'From Folder': get_folder(f_url),  # NIEUW: Map van vertrek
+                                    'From Folder': get_folder(f_url),
                                     'Focus URL': f_url,
                                     'To Hub': cat_lookup.get(t_url, "ALGEMEEN"),
-                                    'To Folder': get_folder(t_url),    # NIEUW: Map van bestemming
+                                    'To Folder': get_folder(t_url),
                                     'Target URL': t_url,
                                     'Score': s * 100
                                 })

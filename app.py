@@ -42,7 +42,10 @@ with st.sidebar:
     st.title("⚙️ Configuratie")
     api_key = st.text_input("OpenAI API Key", type="password", key="api_key_val")
     st.divider()
-    score_threshold = st.slider("Minimale Match %", 50, 95, 80) / 100
+    
+    # NIEUW: Twee losse sliders voor Clusters en Links
+    cluster_threshold = st.slider("Minimale Cluster Match % (Hubs)", 50, 95, 80) / 100
+    score_threshold = st.slider("Minimale Link Match % (Links)", 50, 95, 80) / 100
     links_per_page = st.slider("Aantal links per URL", 1, 10, 5)
 
 # ========================================================
@@ -170,8 +173,10 @@ with tab_tool:
                     vecs = get_embeddings(clean_df['text'].tolist(), api_key)
                     
                     # 2. DYNAMISCHE CLUSTERING (AI groepeert de pagina's zelf op basis van Cosine Similarity)
-                    # distance_threshold bepaalt hoe streng hij is. 0.5 betekent: redelijk wat vrijheid voor de groottes van de hubs.
-                    clustering_model = AgglomerativeClustering(n_clusters=None, distance_threshold=0.5, metric='cosine', linkage='average')
+                    # We berekenen de distance_threshold (1.0 - gekozen match percentage in sidebar)
+                    dist_thresh = 1.0 - cluster_threshold
+                    
+                    clustering_model = AgglomerativeClustering(n_clusters=None, distance_threshold=dist_thresh, metric='cosine', linkage='average')
                     clean_df['Cluster_ID'] = clustering_model.fit_predict(vecs)
                     
                     # 3. CLUSTERS EEN NAAM GEVEN (In Bulk!)

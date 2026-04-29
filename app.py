@@ -56,19 +56,18 @@ def clean_path(url):
     return re.sub(r'[-_/]', ' ', path)
 
 def get_folder(url):
-    """Extraheert de volledige submap-structuur uit een URL"""
+    """Extraheert de eerste hoofdmap (top-level folder) uit een URL"""
     try:
         path = urlparse(str(url)).path
-        if not path or path == '/': 
+        clean_path = path.strip('/')
+        
+        # Als er na het strippen niks overblijft, is het de root
+        if not clean_path:
             return '/'
-        
-        # Als de URL eindigt op een slash, is de URL zelf al een map
-        if path.endswith('/'):
-            return path
-        
-        # Anders knippen we de paginanaam (slug) eraf om de map te vinden
-        parts = path.split('/')
-        return '/'.join(parts[:-1]) + '/'
+            
+        # Pak altijd de eerste submap, ongeacht hoe diep de URL gaat
+        first_folder = clean_path.split('/')[0]
+        return f"/{first_folder}/"
     except:
         return "/"
 

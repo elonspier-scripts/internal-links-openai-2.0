@@ -3,8 +3,10 @@ import pandas as pd
 import numpy as np
 from openai import OpenAI
 from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.cluster import AgglomerativeClustering
 import re
 import io
+import json
 
 # ========================================================
 # 1. UI CONFIGURATIE (Deep Black / Cyber Blue)
@@ -55,12 +57,43 @@ def get_embeddings(texts, key):
     res = client.embeddings.create(input=texts, model='text-embedding-3-small')
     return np.array([d.embedding for d in res.data])
 
-def get_cat(text):
-    words = re.findall(r'\w{4,}', str(text).lower())
-    stop = {'deze', 'voor', 'naar', 'met', 'door', 'geen', 'over', 'mijn'}
-    filtered = [w for w in words if w not in stop]
-    unique = list(dict.fromkeys(filtered))
-    return " / ".join(unique[:2]).upper() if unique else "ALGEMEEN"
+def get_ai_cluster_names_bulk(clusters_dict, key):
+    client = OpenAI(api_key=key)
+    
+    # We bouwen één groot tekstblok met een paar voorbeelden uit elk cluster
+    payload = ""
+    for cid, texts in clusters_dict.items():
+        sample = "\n".join(texts[:10])  # Max 10 URL's per cluster om tokens te besparen
+        payload += f"Cluster ID {cid}:\n{sample}\n\n"
+        
+    prompt = f"""
+    Je bent een SEO expert. Hieronder staan verschillende clusters met URL's en titels.
+    Bedenk voor ELK cluster één overkoepelende categorie-naam.
+    
+    Regels:
+    - Maximaal 5 woorden per naam.
+    - Geef het een korte beschrijvende / relevante naam
+    - Geef je antwoord ALTIJD terug in strict JSON formaat. De sleutel (key) is het Cluster ID (bijv. "0", "1") en de waarde (value) is de bedachte naam.
+    
+    Hier is de data:
+    {payload}
+    """
+    
+    # Gebruik response_format JSON zodat we altijd een leesbaar data-object terugkrijgen
+    res = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3,
+        response_format={ "type": "json_object" }
+    )
+    
+    try:
+        # Zet de JSON string van OpenAI om naar een Python dictionary
+        result = json.loads(res.choices[0].message.content)
+        # OpenAI geeft keys vaak als string terug ("0"), we zetten dit terug naar integers (0)
+        return {int(k): str(v) for k, v in result.items()}
+    except Exception as e:
+        return {} # Fallback als er iets fout gaat
 
 def color_score(v):
     if not isinstance(v, (int, float)): return ''
@@ -115,7 +148,7 @@ with tab_tool:
             st.error(f"⚠️ De volgende velden ontbreken: {', '.join(missing)}")
         else:
             try:
-                with st.spinner("Bezig met semantische analyse..."):
+                with st.spinner("Bezig met AI-clustering en semantische analyse... Dit kan even duren."):
                     raw_df = pd.read_csv(file)
                     url_col = raw_df.columns[0]
                     focus_list = [u.strip() for u in urls_txt.split('\n') if u.strip()]
@@ -132,10 +165,30 @@ with tab_tool:
                     # ----------------------------------
                     
                     clean_df['text'] = clean_df[url_col].astype(str).apply(clean_path) + " " + clean_df.iloc[:, 1].astype(str)
-                    clean_df['Category'] = clean_df['text'].apply(get_cat)
+                    
+                    # 1. Embeddings ophalen voor álle pagina's
+                    vecs = get_embeddings(clean_df['text'].tolist(), api_key)
+                    
+                    # 2. DYNAMISCHE CLUSTERING (AI groepeert de pagina's zelf op basis van Cosine Similarity)
+                    # distance_threshold bepaalt hoe streng hij is. 0.5 betekent: redelijk wat vrijheid voor de groottes van de hubs.
+                    clustering_model = AgglomerativeClustering(n_clusters=None, distance_threshold=0.5, metric='cosine', linkage='average')
+                    clean_df['Cluster_ID'] = clustering_model.fit_predict(vecs)
+                    
+                    # 3. CLUSTERS EEN NAAM GEVEN (In Bulk!)
+                    # Verzamel eerst alle teksten per cluster
+                    clusters_to_name = {}
+                    for cluster_id in clean_df['Cluster_ID'].unique():
+                        texts_in_cluster = clean_df[clean_df['Cluster_ID'] == cluster_id]['text'].tolist()
+                        clusters_to_name[cluster_id] = texts_in_cluster
+                    
+                    # Roep de AI slechts ÉÉN KEER aan voor alle clusters tegelijk
+                    cluster_names = get_ai_cluster_names_bulk(clusters_to_name, api_key)
+                    
+                    # Koppel de AI-namen aan de DataFrame. Als een naam ontbreekt, gebruik "ALGEMEEN"
+                    clean_df['Category'] = clean_df['Cluster_ID'].apply(lambda x: cluster_names.get(x, "ALGEMEEN"))
                     cat_lookup = dict(zip(clean_df[url_col], clean_df['Category']))
 
-                    vecs = get_embeddings(clean_df['text'].tolist(), api_key)
+                    # 4. INTERNE LINKS BEREKENEN
                     sims = cosine_similarity(vecs)
 
                     found = []
